@@ -27,6 +27,12 @@ let ultimoTempo = Date.now();
 function converterStatus(valor) {
   const estado = String(valor || "").trim().toUpperCase();
 
+  if (estado === "DETECTOU" || estado === "ATIVO" || estado === "1") {
+    return "ATIVO";
+  }
+
+  return "INATIVO";
+}
   if (
     estado === "LIVRE" ||
     estado === "ATIVO" ||
