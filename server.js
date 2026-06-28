@@ -21,7 +21,7 @@ const FIREBASE_DATABASE_URL =
 const funcionario = "Débora da Silva Costa";
 const epi = "Capacete 01";
 
-let ultimoEstado = null;
+let ultimoStatus = null;
 let ultimoTempo = Date.now();
 
 function converterStatus(valor) {
@@ -31,15 +31,8 @@ function converterStatus(valor) {
     return "ATIVO";
   }
 
-  return "INATIVO";
-}
-  if (
-    estado === "LIVRE" ||
-    estado === "ATIVO" ||
-    estado === "1" ||
-    estado === "DETECTOU"
-  ) {
-    return "ATIVO";
+  if (estado === "LIVRE" || estado === "INATIVO" || estado === "0") {
+    return "INATIVO";
   }
 
   return "INATIVO";
@@ -49,8 +42,10 @@ function formatarTempo(segundos) {
   const h = Math.floor(segundos / 3600);
   const m = Math.floor((segundos % 3600) / 60);
   const s = segundos % 60;
+
   if (h > 0) return `${h}h ${m}min ${s}s`;
-  return `${m} min ${s} seg`;
+  if (m > 0) return `${m} min ${s} seg`;
+  return `${s} seg`;
 }
 
 async function firebaseGet(path) {
@@ -61,34 +56,34 @@ async function firebaseGet(path) {
 async function firebasePatch(path, data) {
   const r = await fetch(`${FIREBASE_DATABASE_URL}/${path}.json`, {
     method: "PATCH",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data)
   });
-  if (!r.ok) throw new Error(`Firebase PATCH ${r.status}: ${await r.text()}`);
+
+  if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
 
 async function firebasePost(path, data) {
   const r = await fetch(`${FIREBASE_DATABASE_URL}/${path}.json`, {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data)
   });
-  if (!r.ok) throw new Error(`Firebase POST ${r.status}: ${await r.text()}`);
+
+  if (!r.ok) throw new Error(await r.text());
   return await r.json();
 }
 
 async function processar(payload) {
   const agora = new Date();
-  const estadoAtual = String(payload || "").trim().toUpperCase();
+  const rawAtual = String(payload || "").trim().toUpperCase();
+  const statusAtual = converterStatus(rawAtual);
 
-  if (ultimoEstado === null) {
-    ultimoEstado = estadoAtual;
+  if (ultimoStatus === null) {
+    ultimoStatus = statusAtual;
     ultimoTempo = Date.now();
   }
-
-  const statusRegistro = converterStatus(ultimoEstado);
-  const statusAtual = converterStatus(estadoAtual);
 
   const inicio = new Date(ultimoTempo);
   const fim = agora;
@@ -98,17 +93,21 @@ async function processar(payload) {
   const registro = {
     funcionario,
     epi,
-    raw: estadoAtual,
+    raw: rawAtual,
     data: fim.toLocaleDateString("pt-BR"),
     horaInicio: inicio.toLocaleTimeString("pt-BR"),
     horaFim: fim.toLocaleTimeString("pt-BR"),
     dataHoraISO: fim.toISOString(),
-    status: statusRegistro,
-    statusAtual,
+    status: statusAtual,
+    statusAtual: statusAtual,
     tempoSegundos,
     tempo,
-    descricao: `Ficou ${statusRegistro} por ${tempo}`,
-    alarme: statusAtual === "INATIVO" ? "⚠ SEM CAPACETE" : "✅ CAPACETE EM USO",
+    descricao: statusAtual === "ATIVO"
+      ? `Capacete em uso por ${tempo}`
+      : `Sem capacete por ${tempo}`,
+    alarme: statusAtual === "ATIVO"
+      ? "✅ CAPACETE EM USO"
+      : "⚠ SEM CAPACETE",
     valor: statusAtual === "ATIVO" ? 1 : 0
   };
 
@@ -122,24 +121,35 @@ async function processar(payload) {
   };
 
   resumo.totalEventos += 1;
-  if (statusRegistro === "INATIVO") resumo.totalAlertas += 1;
-  if (statusRegistro === "ATIVO") resumo.tempoAtivoSegundos += tempoSegundos;
-  if (statusRegistro === "INATIVO") resumo.tempoInativoSegundos += tempoSegundos;
+
+  if (statusAtual === "INATIVO") {
+    resumo.totalAlertas += 1;
+    resumo.tempoInativoSegundos += tempoSegundos;
+  } else {
+    resumo.tempoAtivoSegundos += tempoSegundos;
+  }
 
   const total = resumo.tempoAtivoSegundos + resumo.tempoInativoSegundos;
-  resumo.conformidade = total > 0 ? Math.round((resumo.tempoAtivoSegundos / total) * 100) : 0;
+  resumo.conformidade = total > 0
+    ? Math.round((resumo.tempoAtivoSegundos / total) * 100)
+    : 0;
+
   resumo.tempoAtivo = formatarTempo(resumo.tempoAtivoSegundos);
   resumo.tempoInativo = formatarTempo(resumo.tempoInativoSegundos);
 
   await firebasePatch("", {
-    ultimo: {...registro, atualizadoEm: fim.toISOString()},
+    ultimo: {
+      ...registro,
+      atualizadoEm: fim.toISOString()
+    },
     resumo
   });
 
-  ultimoEstado = estadoAtual;
+  ultimoStatus = statusAtual;
   ultimoTempo = Date.now();
 
-  console.log("Gravado no Firebase:", registro.statusAtual, registro.raw, registro.horaFim);
+  console.log("MQTT recebido:", rawAtual);
+  console.log("Status gravado:", statusAtual);
 }
 
 const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
@@ -151,23 +161,23 @@ const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
 
 client.on("connect", () => {
   console.log("✅ Conectado ao HiveMQ");
-  client.subscribe(MQTT_TOPIC, (err) => {
-    if (err) console.error("Erro ao assinar tópico:", err);
+  client.subscribe(MQTT_TOPIC, err => {
+    if (err) console.error("Erro ao assinar:", err);
     else console.log("📡 Assinando tópico:", MQTT_TOPIC);
   });
 });
 
 client.on("message", async (topic, message) => {
-  const payload = message.toString();
-  console.log("MQTT recebido:", topic, payload);
   try {
-    await processar(payload);
+    await processar(message.toString());
   } catch (e) {
-    console.error("Erro ao gravar no Firebase:", e.message);
+    console.error("Erro:", e.message);
   }
 });
 
-client.on("error", (err) => console.error("MQTT erro:", err.message));
+client.on("error", err => {
+  console.error("MQTT erro:", err.message);
+});
 
 app.get("/", (req, res) => {
   res.json({
@@ -178,13 +188,15 @@ app.get("/", (req, res) => {
   });
 });
 
-app.post("/teste/:status", async (req, res) => {
+app.get("/teste/:status", async (req, res) => {
   try {
     await processar(req.params.status);
-    res.json({ok: true, status: req.params.status});
+    res.json({ ok: true, enviado: req.params.status });
   } catch (e) {
-    res.status(500).json({ok: false, erro: e.message});
+    res.status(500).json({ ok: false, erro: e.message });
   }
 });
 
-app.listen(PORT, () => console.log("🚀 Backend online na porta", PORT));
+app.listen(PORT, () => {
+  console.log("🚀 Backend online na porta", PORT);
+});
