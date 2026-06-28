@@ -21,8 +21,8 @@ const FIREBASE_DATABASE_URL =
 const funcionario = "Débora da Silva Costa";
 const epi = "Capacete 01";
 
-let ultimoStatus = null;
-let ultimoTempo = Date.now();
+let statusAtualSistema = null;
+let inicioStatus = Date.now();
 
 function converterStatus(valor) {
   const estado = String(valor || "").trim().toUpperCase();
@@ -75,40 +75,28 @@ async function firebasePost(path, data) {
   return await r.json();
 }
 
-async function processar(payload) {
-  const agora = new Date();
-  const rawAtual = String(payload || "").trim().toUpperCase();
-  const statusAtual = converterStatus(rawAtual);
-
-  if (ultimoStatus === null) {
-    ultimoStatus = statusAtual;
-    ultimoTempo = Date.now();
-  }
-
-  const inicio = new Date(ultimoTempo);
-  const fim = agora;
+async function salvarEvento(statusFechado, inicio, fim) {
   const tempoSegundos = Math.max(0, Math.floor((fim - inicio) / 1000));
   const tempo = formatarTempo(tempoSegundos);
 
   const registro = {
     funcionario,
     epi,
-    raw: rawAtual,
     data: fim.toLocaleDateString("pt-BR"),
     horaInicio: inicio.toLocaleTimeString("pt-BR"),
     horaFim: fim.toLocaleTimeString("pt-BR"),
     dataHoraISO: fim.toISOString(),
-    status: statusAtual,
-    statusAtual: statusAtual,
+    status: statusFechado,
+    statusAtual: statusFechado,
     tempoSegundos,
     tempo,
-    descricao: statusAtual === "ATIVO"
+    descricao: statusFechado === "ATIVO"
       ? `Capacete em uso por ${tempo}`
       : `Sem capacete por ${tempo}`,
-    alarme: statusAtual === "ATIVO"
+    alarme: statusFechado === "ATIVO"
       ? "✅ CAPACETE EM USO"
       : "⚠ SEM CAPACETE",
-    valor: statusAtual === "ATIVO" ? 1 : 0
+    valor: statusFechado === "ATIVO" ? 1 : 0
   };
 
   await firebasePost("eventos", registro);
@@ -122,34 +110,72 @@ async function processar(payload) {
 
   resumo.totalEventos += 1;
 
-  if (statusAtual === "INATIVO") {
+  if (statusFechado === "ATIVO") {
+    resumo.tempoAtivoSegundos += tempoSegundos;
+  } else {
     resumo.totalAlertas += 1;
     resumo.tempoInativoSegundos += tempoSegundos;
-  } else {
-    resumo.tempoAtivoSegundos += tempoSegundos;
   }
 
   const total = resumo.tempoAtivoSegundos + resumo.tempoInativoSegundos;
-  resumo.conformidade = total > 0
-    ? Math.round((resumo.tempoAtivoSegundos / total) * 100)
-    : 0;
+
+  resumo.conformidade =
+    total > 0 ? Math.round((resumo.tempoAtivoSegundos / total) * 100) : 0;
 
   resumo.tempoAtivo = formatarTempo(resumo.tempoAtivoSegundos);
   resumo.tempoInativo = formatarTempo(resumo.tempoInativoSegundos);
 
-  await firebasePatch("", {
-    ultimo: {
-      ...registro,
-      atualizadoEm: fim.toISOString()
-    },
-    resumo
+  await firebasePatch("", { resumo });
+
+  return registro;
+}
+
+async function atualizarUltimo(status, raw) {
+  const agora = new Date();
+
+  await firebasePatch("ultimo", {
+    funcionario,
+    epi,
+    raw,
+    status,
+    statusAtual: status,
+    data: agora.toLocaleDateString("pt-BR"),
+    horaFim: agora.toLocaleTimeString("pt-BR"),
+    atualizadoEm: agora.toISOString(),
+    alarme: status === "ATIVO"
+      ? "✅ CAPACETE EM USO"
+      : "⚠ SEM CAPACETE",
+    valor: status === "ATIVO" ? 1 : 0
   });
+}
 
-  ultimoStatus = statusAtual;
-  ultimoTempo = Date.now();
+async function processar(payload) {
+  const raw = String(payload || "").trim().toUpperCase();
+  const novoStatus = converterStatus(raw);
+  const agora = Date.now();
 
-  console.log("MQTT recebido:", rawAtual);
-  console.log("Status gravado:", statusAtual);
+  if (statusAtualSistema === null) {
+    statusAtualSistema = novoStatus;
+    inicioStatus = agora;
+    await atualizarUltimo(novoStatus, raw);
+    console.log("Estado inicial:", novoStatus);
+    return;
+  }
+
+  if (novoStatus !== statusAtualSistema) {
+    const inicio = new Date(inicioStatus);
+    const fim = new Date(agora);
+
+    await salvarEvento(statusAtualSistema, inicio, fim);
+
+    statusAtualSistema = novoStatus;
+    inicioStatus = agora;
+  }
+
+  await atualizarUltimo(novoStatus, raw);
+
+  console.log("MQTT recebido:", raw);
+  console.log("Status atual:", novoStatus);
 }
 
 const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
