@@ -1,0 +1,14 @@
+{
+  "name": "capacete-backend-render-simples",
+  "version": "1.0.0",
+  "description": "Ponte HiveMQ MQTT para Firebase Realtime Database",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.4",
+    "express": "^4.21.2",
+    "cors": "^2.8.5"
+  }
+}
