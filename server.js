@@ -27,11 +27,14 @@ let inicioStatus = Date.now();
 function converterStatus(valor) {
   const estado = String(valor || "").trim().toUpperCase();
 
-  if (estado === "DETECTOU" || estado === "ATIVO" || estado === "1") {
+  // CORRETO PARA O SEU SENSOR:
+  // LIVRE = CAPACETE EM USO = ATIVO
+  // DETECTOU = SEM CAPACETE = INATIVO
+  if (estado === "LIVRE" || estado === "ATIVO" || estado === "1") {
     return "ATIVO";
   }
 
-  if (estado === "LIVRE" || estado === "INATIVO" || estado === "0") {
+  if (estado === "DETECTOU" || estado === "INATIVO" || estado === "0") {
     return "INATIVO";
   }
 
@@ -75,13 +78,14 @@ async function firebasePost(path, data) {
   return await r.json();
 }
 
-async function salvarEvento(statusFechado, inicio, fim) {
+async function salvarEvento(statusFechado, inicio, fim, raw) {
   const tempoSegundos = Math.max(0, Math.floor((fim - inicio) / 1000));
   const tempo = formatarTempo(tempoSegundos);
 
   const registro = {
     funcionario,
     epi,
+    raw,
     data: fim.toLocaleDateString("pt-BR"),
     horaInicio: inicio.toLocaleTimeString("pt-BR"),
     horaFim: fim.toLocaleTimeString("pt-BR"),
@@ -90,12 +94,14 @@ async function salvarEvento(statusFechado, inicio, fim) {
     statusAtual: statusFechado,
     tempoSegundos,
     tempo,
-    descricao: statusFechado === "ATIVO"
-      ? `Capacete em uso por ${tempo}`
-      : `Sem capacete por ${tempo}`,
-    alarme: statusFechado === "ATIVO"
-      ? "✅ CAPACETE EM USO"
-      : "⚠ SEM CAPACETE",
+    descricao:
+      statusFechado === "ATIVO"
+        ? `Capacete em uso por ${tempo}`
+        : `Sem capacete por ${tempo}`,
+    alarme:
+      statusFechado === "ATIVO"
+        ? "✅ CAPACETE EM USO"
+        : "⚠ SEM CAPACETE",
     valor: statusFechado === "ATIVO" ? 1 : 0
   };
 
@@ -142,9 +148,14 @@ async function atualizarUltimo(status, raw) {
     data: agora.toLocaleDateString("pt-BR"),
     horaFim: agora.toLocaleTimeString("pt-BR"),
     atualizadoEm: agora.toISOString(),
-    alarme: status === "ATIVO"
-      ? "✅ CAPACETE EM USO"
-      : "⚠ SEM CAPACETE",
+    descricao:
+      status === "ATIVO"
+        ? "Capacete detectado em uso"
+        : "Capacete não está em uso",
+    alarme:
+      status === "ATIVO"
+        ? "✅ CAPACETE EM USO"
+        : "⚠ SEM CAPACETE",
     valor: status === "ATIVO" ? 1 : 0
   });
 }
@@ -152,24 +163,24 @@ async function atualizarUltimo(status, raw) {
 async function processar(payload) {
   const raw = String(payload || "").trim().toUpperCase();
   const novoStatus = converterStatus(raw);
-  const agora = Date.now();
+  const agoraMs = Date.now();
 
   if (statusAtualSistema === null) {
     statusAtualSistema = novoStatus;
-    inicioStatus = agora;
+    inicioStatus = agoraMs;
     await atualizarUltimo(novoStatus, raw);
-    console.log("Estado inicial:", novoStatus);
+    console.log("Estado inicial:", raw, "=>", novoStatus);
     return;
   }
 
   if (novoStatus !== statusAtualSistema) {
     const inicio = new Date(inicioStatus);
-    const fim = new Date(agora);
+    const fim = new Date(agoraMs);
 
-    await salvarEvento(statusAtualSistema, inicio, fim);
+    await salvarEvento(statusAtualSistema, inicio, fim, raw);
 
     statusAtualSistema = novoStatus;
-    inicioStatus = agora;
+    inicioStatus = agoraMs;
   }
 
   await atualizarUltimo(novoStatus, raw);
@@ -187,21 +198,26 @@ const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
 
 client.on("connect", () => {
   console.log("✅ Conectado ao HiveMQ");
-  client.subscribe(MQTT_TOPIC, err => {
-    if (err) console.error("Erro ao assinar:", err);
-    else console.log("📡 Assinando tópico:", MQTT_TOPIC);
+
+  client.subscribe(MQTT_TOPIC, (err) => {
+    if (err) {
+      console.error("Erro ao assinar tópico:", err);
+    } else {
+      console.log("📡 Assinando tópico:", MQTT_TOPIC);
+    }
   });
 });
 
 client.on("message", async (topic, message) => {
   try {
-    await processar(message.toString());
+    const payload = message.toString();
+    await processar(payload);
   } catch (e) {
     console.error("Erro:", e.message);
   }
 });
 
-client.on("error", err => {
+client.on("error", (err) => {
   console.error("MQTT erro:", err.message);
 });
 
@@ -209,6 +225,7 @@ app.get("/", (req, res) => {
   res.json({
     ok: true,
     sistema: "Capacete Inteligente",
+    regra: "LIVRE = ATIVO / DETECTOU = INATIVO",
     mqttTopic: MQTT_TOPIC,
     firebase: FIREBASE_DATABASE_URL
   });
@@ -217,9 +234,16 @@ app.get("/", (req, res) => {
 app.get("/teste/:status", async (req, res) => {
   try {
     await processar(req.params.status);
-    res.json({ ok: true, enviado: req.params.status });
+    res.json({
+      ok: true,
+      recebido: req.params.status,
+      convertido: converterStatus(req.params.status)
+    });
   } catch (e) {
-    res.status(500).json({ ok: false, erro: e.message });
+    res.status(500).json({
+      ok: false,
+      erro: e.message
+    });
   }
 });
 
