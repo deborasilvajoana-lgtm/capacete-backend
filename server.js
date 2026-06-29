@@ -24,17 +24,20 @@ const epi = "Capacete 01";
 let statusAtualSistema = null;
 let inicioStatus = Date.now();
 let rawAtualSistema = "";
+let ultimaLeituraMs = 0;
 
-/*
-  REGRA DEFINITIVA DO SENSOR:
-  DETECTOU = ATIVO = CAPACETE EM USO = VERDE
-  LIVRE    = INATIVO = SEM CAPACETE = VERMELHO
-*/
+const TEMPO_SEM_LEITURA_MS = 20000;
+
 function converterStatus(valor) {
   const estado = String(valor || "").trim().toUpperCase();
 
+  // REGRA DEFINITIVA:
+  // DETECTOU = capacete em uso = ATIVO = verde
+  // LIVRE = sem capacete = INATIVO = vermelho
+  // SEM_LEITURA = falha/desligado = INATIVO = vermelho
   if (estado.includes("DETECTOU")) return "ATIVO";
   if (estado.includes("LIVRE")) return "INATIVO";
+  if (estado.includes("SEM_LEITURA")) return "INATIVO";
 
   if (estado === "ATIVO" || estado === "1" || estado === "TRUE") return "ATIVO";
   if (estado === "INATIVO" || estado === "0" || estado === "FALSE") return "INATIVO";
@@ -46,16 +49,15 @@ function textoStatus(status) {
   return status === "ATIVO" ? "CAPACETE EM USO" : "SEM CAPACETE";
 }
 
-function descricaoStatus(status) {
+function descricaoStatus(status, raw) {
+  if (raw === "SEM_LEITURA") return "ESP32 sem leitura. Considerado sem capacete.";
   return status === "ATIVO"
     ? "Sensor detectou o capacete em uso"
     : "Sensor livre, capacete sem uso";
 }
 
 function alarmeStatus(status) {
-  return status === "ATIVO"
-    ? "✅ CAPACETE EM USO"
-    : "⚠ SEM CAPACETE";
+  return status === "ATIVO" ? "✅ CAPACETE EM USO" : "⚠ SEM CAPACETE";
 }
 
 function formatarTempo(segundos) {
@@ -94,25 +96,6 @@ async function firebasePost(path, data) {
 
   if (!r.ok) throw new Error(`Firebase POST ${r.status}: ${await r.text()}`);
   return await r.json();
-}
-
-async function limparUltimo() {
-  const agora = new Date();
-  await firebasePatch("ultimo", {
-    funcionario,
-    epi,
-    raw: "AGUARDANDO",
-    rawAtual: "AGUARDANDO",
-    status: "INATIVO",
-    statusAtual: "INATIVO",
-    titulo: "SEM CAPACETE",
-    data: agora.toLocaleDateString("pt-BR"),
-    horaFim: agora.toLocaleTimeString("pt-BR"),
-    atualizadoEm: agora.toISOString(),
-    descricao: "Sistema iniciado. Aguardando leitura do sensor.",
-    alarme: "⚠ SEM CAPACETE",
-    valor: 0
-  });
 }
 
 async function salvarEvento(statusFechado, inicio, fim, rawFechado) {
@@ -160,10 +143,14 @@ async function salvarEvento(statusFechado, inicio, fim, rawFechado) {
     resumo.tempoInativoSegundos = Number(resumo.tempoInativoSegundos || 0) + tempoSegundos;
   }
 
-  const total = Number(resumo.tempoAtivoSegundos || 0) + Number(resumo.tempoInativoSegundos || 0);
+  const total =
+    Number(resumo.tempoAtivoSegundos || 0) +
+    Number(resumo.tempoInativoSegundos || 0);
 
   resumo.conformidade =
-    total > 0 ? Math.round((Number(resumo.tempoAtivoSegundos || 0) / total) * 100) : 0;
+    total > 0
+      ? Math.round((Number(resumo.tempoAtivoSegundos || 0) / total) * 100)
+      : 0;
 
   resumo.tempoAtivo = formatarTempo(Number(resumo.tempoAtivoSegundos || 0));
   resumo.tempoInativo = formatarTempo(Number(resumo.tempoInativoSegundos || 0));
@@ -187,7 +174,7 @@ async function atualizarUltimo(status, raw) {
     data: agora.toLocaleDateString("pt-BR"),
     horaFim: agora.toLocaleTimeString("pt-BR"),
     atualizadoEm: agora.toISOString(),
-    descricao: descricaoStatus(status),
+    descricao: descricaoStatus(status, raw),
     alarme: alarmeStatus(status),
     valor: status === "ATIVO" ? 1 : 0
   });
@@ -197,6 +184,8 @@ async function processar(payload) {
   const raw = String(payload || "").trim().toUpperCase();
   const novoStatus = converterStatus(raw);
   const agoraMs = Date.now();
+
+  ultimaLeituraMs = agoraMs;
 
   console.log("MQTT recebido:", raw);
   console.log("Convertido:", novoStatus);
@@ -228,6 +217,36 @@ async function processar(payload) {
   await atualizarUltimo(novoStatus, raw);
 }
 
+async function verificarSemLeitura() {
+  try {
+    if (!ultimaLeituraMs) return;
+
+    const agoraMs = Date.now();
+    const semLeituraHa = agoraMs - ultimaLeituraMs;
+
+    if (semLeituraHa >= TEMPO_SEM_LEITURA_MS && statusAtualSistema !== "INATIVO") {
+      console.log("ESP32 sem leitura. Mudando para INATIVO.");
+
+      const inicio = new Date(inicioStatus);
+      const fim = new Date(agoraMs);
+
+      await salvarEvento(statusAtualSistema, inicio, fim, rawAtualSistema || "DETECTOU");
+
+      statusAtualSistema = "INATIVO";
+      rawAtualSistema = "SEM_LEITURA";
+      inicioStatus = agoraMs;
+
+      await atualizarUltimo("INATIVO", "SEM_LEITURA");
+    }
+
+    if (semLeituraHa >= TEMPO_SEM_LEITURA_MS && statusAtualSistema === "INATIVO") {
+      await atualizarUltimo("INATIVO", "SEM_LEITURA");
+    }
+  } catch (e) {
+    console.error("Erro na verificação sem leitura:", e.message);
+  }
+}
+
 const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
   username: MQTT_USER,
   password: MQTT_PASS,
@@ -238,6 +257,7 @@ const client = mqtt.connect(`mqtts://${MQTT_HOST}:${MQTT_PORT}`, {
 
 client.on("connect", () => {
   console.log("✅ Conectado ao HiveMQ");
+
   client.subscribe(MQTT_TOPIC, (err) => {
     if (err) {
       console.error("Erro ao assinar tópico:", err);
@@ -259,11 +279,13 @@ client.on("error", (err) => {
   console.error("MQTT erro:", err.message);
 });
 
+setInterval(verificarSemLeitura, 5000);
+
 app.get("/", (req, res) => {
   res.json({
     ok: true,
     sistema: "Capacete Inteligente",
-    regra: "DETECTOU = ATIVO/VERDE; LIVRE = INATIVO/VERMELHO",
+    regra: "DETECTOU = ATIVO/VERDE; LIVRE = INATIVO/VERMELHO; SEM LEITURA = INATIVO/VERMELHO",
     mqttTopic: MQTT_TOPIC,
     firebase: FIREBASE_DATABASE_URL
   });
@@ -290,19 +312,40 @@ app.get("/teste/:status", async (req, res) => {
   }
 });
 
-app.get("/resetar-ultimo", async (req, res) => {
+app.get("/forcar-inativo", async (req, res) => {
   try {
-    statusAtualSistema = null;
-    inicioStatus = Date.now();
-    rawAtualSistema = "";
-    await limparUltimo();
-    res.json({ ok: true, mensagem: "Último status resetado para INATIVO." });
+    const agoraMs = Date.now();
+
+    if (statusAtualSistema && statusAtualSistema !== "INATIVO") {
+      await salvarEvento(
+        statusAtualSistema,
+        new Date(inicioStatus),
+        new Date(agoraMs),
+        rawAtualSistema || "DETECTOU"
+      );
+    }
+
+    statusAtualSistema = "INATIVO";
+    rawAtualSistema = "SEM_LEITURA";
+    inicioStatus = agoraMs;
+    ultimaLeituraMs = agoraMs - TEMPO_SEM_LEITURA_MS;
+
+    await atualizarUltimo("INATIVO", "SEM_LEITURA");
+
+    res.json({
+      ok: true,
+      status: "INATIVO",
+      mensagem: "Sistema forçado para vermelho/sem capacete."
+    });
   } catch (e) {
-    res.status(500).json({ ok: false, erro: e.message });
+    res.status(500).json({
+      ok: false,
+      erro: e.message
+    });
   }
 });
 
 app.listen(PORT, () => {
   console.log("🚀 Backend online na porta", PORT);
-  console.log("REGRA ATIVA: DETECTOU = ATIVO/VERDE | LIVRE = INATIVO/VERMELHO");
+  console.log("REGRA ATIVA: DETECTOU = ATIVO/VERDE | LIVRE = INATIVO/VERMELHO | SEM LEITURA = INATIVO/VERMELHO");
 });
