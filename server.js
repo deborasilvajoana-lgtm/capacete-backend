@@ -27,12 +27,19 @@ let inicioStatus = Date.now();
 function converterStatus(valor) {
   const estado = String(valor || "").trim().toUpperCase();
 
-  // CORRETO PARA O SEU SENSOR:
-  // LIVRE = CAPACETE EM USO = ATIVO
-  // DETECTOU = SEM CAPACETE = INATIVO
-  if (estado === "LIVRE" || estado === "ATIVO" || estado === "1") {
+  // CORRETO AGORA:
+  // DETECTOU = CAPACETE EM USO
+  // LIVRE = SEM CAPACETE
+  if (estado === "DETECTOU" || estado === "ATIVO" || estado === "1") {
     return "ATIVO";
   }
+
+  if (estado === "LIVRE" || estado === "INATIVO" || estado === "0") {
+    return "INATIVO";
+  }
+
+  return "INATIVO";
+}
 
   if (estado === "DETECTOU" || estado === "INATIVO" || estado === "0") {
     return "INATIVO";
