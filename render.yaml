@@ -1,20 +1,52 @@
 services:
   - type: web
-    name: capacete-backend
+    name: capacete-backend-pro
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci || npm install
     startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: MQTT_HOST
-        value: 14acbc646e274caaaf10971e5b3b335e.s1.eu.hivemq.cloud
+        sync: false
       - key: MQTT_PORT
-        value: 8883
+        value: "8883"
       - key: MQTT_USER
-        value: esp32
+        sync: false
       - key: MQTT_PASS
-        value: Capacete2026@
-      - key: MQTT_TOPIC
-        value: capacete/status
+        sync: false
+      - key: MQTT_TOPICS
+        value: capacete/status,capacete/+/status
       - key: FIREBASE_DATABASE_URL
-        value: https://capacete-inteligente-bf599-default-rtdb.firebaseio.com
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: DEFAULT_DEVICE_ID
+        value: default
+      - key: DEFAULT_FUNCIONARIO
+        value: Débora da Silva Costa
+      - key: DEFAULT_EPI
+        value: Capacete 01
+      - key: OFFLINE_GAP_SECONDS
+        value: "120"
+      - key: ENABLE_LEGACY_MIRROR
+        value: "true"
+      - key: ENABLE_TEST_ENDPOINTS
+        value: "false"
+
+      - key: MARY_AI_ENABLED
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        sync: false
+      - key: OPENROUTER_SITE_URL
+        sync: false
+
+      # E-mail de solicitações via API HTTPS no Render Free
+      - key: APPROVAL_ADMIN_EMAIL
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_EMAIL
+        sync: false

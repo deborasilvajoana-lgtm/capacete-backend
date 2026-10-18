@@ -1,14 +1,25 @@
 {
-"name": "capacete-backend-final",
-"version": "1.0.0",
-"main": "server.js",
-"scripts": {
-"start": "node server.js"
-},
-"dependencies": {
-"cors": "^2.8.5",
-"express": "^4.21.2",
-"mqtt": "^5.10.4",
-"firebase-admin": "^13.0.0"
-}
+  "name": "capacete-inteligente-backend",
+  "version": "3.5.0",
+  "private": true,
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check lib/status.js && node --check lib/email_https.js",
+    "test": "node --test",
+    "authorize": "node scripts/authorize-user.js",
+    "migrate:legacy": "node scripts/migrate-legacy.js",
+    "bootstrap:company": "node scripts/bootstrap-company.js",
+    "bootstrap:platform-admin": "node scripts/bootstrap-platform-admin.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "firebase-admin": "^13.0.2",
+    "helmet": "^8.0.0",
+    "mqtt": "^5.10.4"
+  }
 }
