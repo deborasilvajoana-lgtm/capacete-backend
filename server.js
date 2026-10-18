@@ -1,5 +1,6 @@
 "use strict";
 const { companyRole } = require('./lib/access');
+const { isApprovedDashboardOrigin } = require('./lib/cors_policy');
 const { validRegistration, isAuthorized } = require('./lib/access_requests');
 const { makeApprovalEmailSender, isEmailReady } = require('./lib/email_https');
 const { canAcceptDeviceReading } = require('./lib/device_policy');
@@ -73,6 +74,23 @@ const app = express();
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(express.json({ limit: "32kb" }));
+
+// Aprovacoes pelo Firebase Hosting: preflight CORS com origem exata.
+// A verificacao de identidade e permissao administrativa permanece no Firebase ID Token.
+app.use((req,res,next) => {
+  const origin = String(req.get('origin') || '');
+  const accepted = isApprovedDashboardOrigin(origin,process.env.DASHBOARD_ALLOWED_ORIGINS || '');
+  if (accepted) {
+    res.setHeader('Access-Control-Allow-Origin',origin);
+    res.setHeader('Vary','Origin');
+    res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');
+    res.setHeader('Access-Control-Max-Age','600');
+  }
+  if(req.method==='OPTIONS')return res.sendStatus(accepted || !origin ? 204 : 403);
+  next();
+});
+
 
 const adminLimiter = rateLimit({
   windowMs: 60_000,
@@ -775,7 +793,7 @@ client.on("message", (topic, message) => {
 });
 
 app.get("/", (req, res) => {
-  res.json({ ok: true, service: "capacete-inteligente-backend", version: "3.5.0", maryAiConfigured: MARY_AI_CONFIGURED });
+  res.json({ ok: true, service: "capacete-inteligente-backend", version: "3.5.3", maryAiConfigured: MARY_AI_CONFIGURED });
 });
 
 app.get("/health", async (req, res) => {
@@ -792,7 +810,7 @@ app.get("/health", async (req, res) => {
     firebase: firebaseOk,
     mqtt: mqttConnected,
     uptimeSeconds: Math.floor(process.uptime()),
-    version: "3.5.0",
+    version: "3.5.3",
     maryAiConfigured: MARY_AI_CONFIGURED,
   });
 });
@@ -895,9 +913,14 @@ app.get('/access-requests/status', adminLimiter, async(req,res) => {
 app.get('/platform/access-requests', adminLimiter, requirePlatformAdmin, async(req,res) => {
   const snap=await db.ref('enterpriseAccessRequests').once('value');
   const all=asObject(snap.val());
-  const requests=Object.values(all).filter(x=>x&&x.status==='pending').map(x=>({
-    uid:x.uid,email:x.email,displayName:x.displayName,company:x.company,cnpj:x.cnpj,requestedAt:x.requestedAt,emailDelivered:x.emailDelivered===true,
-  }));
+  // Default preserva os clientes antigos; a tela da administradora pode solicitar historico.
+  const showAll=req.query.status==='all';
+  const requests=Object.values(all).filter(x=>x&&typeof x==='object'&&
+    ['pending','approved','rejected'].includes(x.status)&&(showAll||x.status==='pending')).map(x=>({
+    uid:String(x.uid||''),email:String(x.email||''),displayName:String(x.displayName||''),
+    company:String(x.company||''),cnpj:String(x.cnpj||''),requestedAt:x.requestedAt||null,
+    emailDelivered:x.emailDelivered===true,status:x.status,decidedAt:x.decidedAt||null,
+  })).sort((a,b)=>String(b.requestedAt||'').localeCompare(String(a.requestedAt||''))).slice(0,500);
   res.json({ok:true,requests});
 });
 
@@ -1446,7 +1469,7 @@ app.post("/admin/reset", adminLimiter, async (req, res) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`Backend Capacete Inteligente v3.5 online na porta ${PORT}.`);
+  console.log(`Backend Capacete Inteligente v3.5.3 online na porta ${PORT}.`);
   console.log("Regra: DETECTOU=ATIVO | LIVRE=INATIVO; jornada pode resultar em PAUSA/FORA_JORNADA.");
   console.log(`Endpoints administrativos: ${ENABLE_TEST_ENDPOINTS ? "habilitados e protegidos" : "desativados"}.`);
 });

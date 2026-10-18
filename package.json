@@ -1,6 +1,6 @@
 {
   "name": "capacete-inteligente-backend",
-  "version": "3.5.0",
+  "version": "3.5.3",
   "private": true,
   "main": "server.js",
   "engines": {

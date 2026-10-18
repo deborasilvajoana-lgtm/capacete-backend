@@ -89,3 +89,15 @@ O aplicativo chama `POST /mary/chat` com o token Firebase do usuário. O backend
 O envio via SMTP convencional é bloqueado no Render Free; a nova integração envia solicitações pela API HTTPS do Brevo. Adicione no Render somente depois de cadastrar remetente verificado: `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `APPROVAL_ADMIN_EMAIL`. Sem esses campos o cadastro fica bloqueado (503), sem autorização automática.
 
 O ESP32 legado publica em `capacete/status`. Cada novo dispositivo usa `capacete/<id>/status` e deve estar associado em `deviceRegistry/<id>` antes de ter os dados aceitos. A sincronização do painel pessoal requer implantação/teste específico e não foi realizada neste pacote.
+
+
+## Atualização 3.5.3 — Dashboard de Solicitações de Acesso
+
+- O site aprovado `capacete-inteligente-bf599.web.app` pode consultar a API por CORS.
+- A origem é verificada por igualdade exata (sem `*`).
+- Autorização NÃO depende de CORS: exige Firebase ID Token da Administradora Geral, e-mail verificado e perfil `platformAdmin=true`.
+- `GET /platform/access-requests?status=all` retorna pendentes, aprovadas e rejeitadas (máximo 500). Sem parâmetro mantém apenas pendentes, por compatibilidade.
+- `POST /platform/access-requests/:uid/decision` continua exigindo administradora autenticada.
+- A UI fica no menu `Gestão > Solicitações de acesso` da versão 3.1.12 do site.
+- Para um domínio próprio futuro, defina `DASHBOARD_ALLOWED_ORIGINS` com origens HTTPS explícitas separadas por vírgula.
+- O Render pode fazer deploy automático após o push, se Auto-Deploy estiver ativado; confira `Deploys` e `/health`.
