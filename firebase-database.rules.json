@@ -100,8 +100,12 @@
       }
     },
     "devices": {
-      ".read": "auth != null && root.child('users').child(auth.uid).child('profile').child('enabled').val() !== false && (root.child('authorizedUsers').child(auth.uid).val() === true || root.child('authorizedUsers').child(auth.uid).child('enabled').val() === true) && (!root.child('users').child(auth.uid).child('profile').child('companyId').exists() || root.child('users').child(auth.uid).child('profile').child('companyId').val() === '' || root.child('users').child(auth.uid).child('profile').child('platformAdmin').val() === true)",
-      ".write": false
+      ".read": false,
+      ".write": false,
+      "$deviceId": {
+        ".read": "($deviceId === 'default' ? (auth != null && root.child('users').child(auth.uid).child('profile').child('enabled').val() !== false && (root.child('authorizedUsers').child(auth.uid).val() === true || root.child('authorizedUsers').child(auth.uid).child('enabled').val() === true) && root.child('personalHelmetOwners').child($deviceId).child(auth.uid).val() === true) : (auth != null && root.child('users').child(auth.uid).child('profile').child('enabled').val() !== false && (root.child('authorizedUsers').child(auth.uid).val() === true || root.child('authorizedUsers').child(auth.uid).child('enabled').val() === true) && (!root.child('users').child(auth.uid).child('profile').child('companyId').exists() || root.child('users').child(auth.uid).child('profile').child('companyId').val() === '' || root.child('users').child(auth.uid).child('profile').child('platformAdmin').val() === true)))",
+        ".write": false
+      }
     },
     "ultimo": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('profile').child('enabled').val() !== false && (root.child('authorizedUsers').child(auth.uid).val() === true || root.child('authorizedUsers').child(auth.uid).child('enabled').val() === true) && (!root.child('users').child(auth.uid).child('profile').child('companyId').exists() || root.child('users').child(auth.uid).child('profile').child('companyId').val() === '' || root.child('users').child(auth.uid).child('profile').child('platformAdmin').val() === true)",
