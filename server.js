@@ -52,6 +52,8 @@ const CONTEXT_CACHE_SECONDS = Math.max(5, Number(process.env.CONTEXT_CACHE_SECON
 const ENABLE_LEGACY_MIRROR = boolEnv("ENABLE_LEGACY_MIRROR", true);
 const ENABLE_TEST_ENDPOINTS = boolEnv("ENABLE_TEST_ENDPOINTS", false);
 const ENABLE_PERSONAL_PHYSICAL_AUDIT=boolEnv("ENABLE_PERSONAL_PHYSICAL_AUDIT",false);
+// Filtro de 3s so para eventos da nova auditoria do CAP-001. Nao altera alertas antigos.
+const PERSONAL_AUDIT_STABILITY_MS=3000;
 const ADMIN_TEST_TOKEN = String(process.env.ADMIN_TEST_TOKEN || "").trim();
 const MARY_AI_ENABLED = boolEnv("MARY_AI_ENABLED", true);
 const OPENROUTER_API_KEY = String(process.env.OPENROUTER_API_KEY || "").trim();
@@ -515,7 +517,7 @@ async function recordPersonalPhysicalAudit(deviceId, sensorStatus, schedule, now
   const result=advanceAudit(previous,{
     nowMs,sensorStatus,scheduleStatus:schedule?.status||'MONITORAR',
     scheduleReason:schedule?.reason||'',offlineAfterMs:OFFLINE_GAP_SECONDS*1000,
-    observed,
+    observed,debounceMs:PERSONAL_AUDIT_STABILITY_MS,
   });
   if(!result.changed||!result.state)return;
   const orig=String(a.val()?.origemLeitura||'ESP32_MQTT');
