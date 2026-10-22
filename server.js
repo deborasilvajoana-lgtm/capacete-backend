@@ -506,7 +506,7 @@ async function persistCurrent(deviceId, reading, state, nowMs) {
 
 
 // AUDITORIA EXCLUSIVAMENTE PESSOAL. Dados ficam separados do modulo empresarial.
-const personalPhysicalBase = () => `devices/${DEFAULT_DEVICE_ID}/auditoriaFisica`;
+const personalPhysicalBase = () => `personalAudits/${DEFAULT_DEVICE_ID}`;
 async function recordPersonalPhysicalAudit(deviceId, sensorStatus, schedule, nowMs, observed=true, origin='ESP32_MQTT') {
   if (!ENABLE_PERSONAL_PHYSICAL_AUDIT || deviceId !== DEFAULT_DEVICE_ID) return;
   const base=personalPhysicalBase();
@@ -1116,10 +1116,10 @@ app.get('/monitoring/devices/:deviceId/physical-audit', adminLimiter, requireAut
   if(!ENABLE_PERSONAL_PHYSICAL_AUDIT) return res.status(503).json({ok:false,error:'Auditoria fisica pessoal ainda nao ativada'});
   if(req.params.deviceId!==DEFAULT_DEVICE_ID) return res.status(404).json({ok:false,error:'Capacete nao disponivel nesta conta pessoal'});
   try {
-    if(req.appUser.platformAdmin!==true){
-      const own=await db.ref(`personalHelmetOwners/${DEFAULT_DEVICE_ID}/${req.appUser.uid}`).once('value');
-      if(own.val()!==true) return res.status(403).json({ok:false,error:'Acesso nao autorizado ao capacete pessoal'});
-    }
+    // Administrador da empresa ou da plataforma nao herda acesso ao capacete pessoal.
+    // Somente usuario explicitamente vinculado e autenticado consulta esta auditoria.
+    const own=await db.ref(`personalHelmetOwners/${DEFAULT_DEVICE_ID}/${req.appUser.uid}`).once('value');
+    if(own.val()!==true) return res.status(403).json({ok:false,error:'Acesso nao autorizado ao capacete pessoal'});
     const base=personalPhysicalBase();
     const [a,r,e]=await Promise.all([
       db.ref(`${base}/atual`).once('value'),
