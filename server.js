@@ -14,6 +14,7 @@ const mqtt = require("mqtt");
 const admin = require("firebase-admin");
 const { parseSensorMessage, normalizeDeviceId } = require("./lib/status");
 const { evaluateSchedule, effectiveStatus } = require("./lib/schedule");
+const {advanceAudit,projectAudit,makeAuditEventId}=require("./lib/helmet_audit");
 
 function requiredEnv(name) {
   const value = String(process.env[name] || "").trim();
@@ -50,6 +51,7 @@ const OFFLINE_GAP_SECONDS = Math.max(30, Number(process.env.OFFLINE_GAP_SECONDS 
 const CONTEXT_CACHE_SECONDS = Math.max(5, Number(process.env.CONTEXT_CACHE_SECONDS || 30));
 const ENABLE_LEGACY_MIRROR = boolEnv("ENABLE_LEGACY_MIRROR", true);
 const ENABLE_TEST_ENDPOINTS = boolEnv("ENABLE_TEST_ENDPOINTS", false);
+const ENABLE_PERSONAL_PHYSICAL_AUDIT=boolEnv("ENABLE_PERSONAL_PHYSICAL_AUDIT",false);
 const ADMIN_TEST_TOKEN = String(process.env.ADMIN_TEST_TOKEN || "").trim();
 const MARY_AI_ENABLED = boolEnv("MARY_AI_ENABLED", true);
 const OPENROUTER_API_KEY = String(process.env.OPENROUTER_API_KEY || "").trim();
@@ -500,6 +502,35 @@ async function persistCurrent(deviceId, reading, state, nowMs) {
   await db.ref().update(updates);
 }
 
+
+// AUDITORIA EXCLUSIVAMENTE PESSOAL. Dados ficam separados do modulo empresarial.
+const personalPhysicalBase = () => `devices/${DEFAULT_DEVICE_ID}/auditoriaFisica`;
+async function recordPersonalPhysicalAudit(deviceId, sensorStatus, schedule, nowMs, observed=true, origin='ESP32_MQTT') {
+  if (!ENABLE_PERSONAL_PHYSICAL_AUDIT || deviceId !== DEFAULT_DEVICE_ID) return;
+  const base=personalPhysicalBase();
+  const [a,r]=await Promise.all([
+    db.ref(`${base}/atual`).once('value'),db.ref(`${base}/resumo`).once('value'),
+  ]);
+  const previous={atual:a.val(),resumo:r.val()};
+  const result=advanceAudit(previous,{
+    nowMs,sensorStatus,scheduleStatus:schedule?.status||'MONITORAR',
+    scheduleReason:schedule?.reason||'',offlineAfterMs:OFFLINE_GAP_SECONDS*1000,
+    observed,
+  });
+  if(!result.changed||!result.state)return;
+  const orig=String(a.val()?.origemLeitura||'ESP32_MQTT');
+  result.state.atual.origemLeitura=observed?origin:orig;
+  const updates={
+    [`${base}/atual`]:result.state.atual,
+    [`${base}/resumo`]:{...result.state.resumo,atualizadoEm:new Date(nowMs).toISOString()},
+  };
+  for(const event of result.events){
+    const eventId=makeAuditEventId(deviceId,event);
+    updates[`${base}/eventos/${eventId}`]={...event,eventId,deviceId,origemLeitura:orig};
+  }
+  await db.ref().update(updates);
+}
+
 async function collectAuthorizedTokens(companyId = "") {
   const [authSnap, usersSnap] = await Promise.all([
     db.ref("authorizedUsers").once("value"),
@@ -635,7 +666,7 @@ function makeState(reading, context, scheduleResult, nowMs) {
   };
 }
 
-async function processReading(reading) {
+async function processReading(reading, origin="ESP32_MQTT") {
   // Legacy ESP32 is intentionally exempt. New devices require registration
   // by an approved administrator, preventing random topics polluting Firebase.
   const registrySnap = await db.ref(`deviceRegistry/${reading.deviceId}`).once('value');
@@ -692,6 +723,11 @@ async function processReading(reading) {
 
   state.lastReadingAtMs = nowMs;
   await persistCurrent(reading.deviceId, reading, state, nowMs);
+  // Falhas da auditoria nao interrompem monitoramento anterior do ESP32.
+  if (ENABLE_PERSONAL_PHYSICAL_AUDIT && reading.deviceId===DEFAULT_DEVICE_ID){
+    try{ await recordPersonalPhysicalAudit(reading.deviceId,reading.status,scheduleResult,nowMs,true,origin); }
+    catch(e){ console.error('Auditoria fisica pessoal:',e.message); }
+  }
 
   if (enteredInactive) {
     await sendNoHelmetNotification(reading, state);
@@ -707,7 +743,13 @@ async function applyScheduleTickForDevice(deviceId, state, nowMs) {
   if (!state || !["ATIVO", "INATIVO"].includes(state.sensorStatus)) return;
   // Um relógio de jornada nunca transforma ausência de comunicação em
   // "sem capacete". Se a leitura estiver velha, o app mostrará OFFLINE.
-  if (nowMs - state.lastReadingAtMs > OFFLINE_GAP_SECONDS * 1000) return;
+  if (nowMs - state.lastReadingAtMs > OFFLINE_GAP_SECONDS * 1000) {
+    if(ENABLE_PERSONAL_PHYSICAL_AUDIT && deviceId===DEFAULT_DEVICE_ID){
+      try{await recordPersonalPhysicalAudit(deviceId,null,{status:'MONITORAR'},nowMs,false);}
+      catch(e){console.error('Auditoria offline pessoal:',e.message);}
+    }
+    return;
+  }
 
   const reading = {
     deviceId,
@@ -722,6 +764,10 @@ async function applyScheduleTickForDevice(deviceId, state, nowMs) {
   const next = makeState(reading, context, scheduleResult, nowMs);
   next.lastReadingAtMs = state.lastReadingAtMs;
 
+  if(ENABLE_PERSONAL_PHYSICAL_AUDIT && deviceId===DEFAULT_DEVICE_ID && next.status!==state.status){
+    try{await recordPersonalPhysicalAudit(deviceId,null,scheduleResult,nowMs,false);}
+    catch(e){console.error('Auditoria jornada pessoal:',e.message);}
+  }
   if (next.status === state.status && !contextChanged(state, next)) return;
 
   if (state.status === "INATIVO") {
@@ -1060,6 +1106,32 @@ app.post("/account/companies", adminLimiter, requireAuthorizedUser, async (req, 
     console.error("Criar empresa da conta:", error.message);
     return res.status(500).json({ ok: false, error: "Não foi possível cadastrar a empresa" });
   }
+});
+
+
+// Somente o capacete LEGADO pessoal. Acesso empresarial nunca e alterado.
+app.get('/monitoring/devices/:deviceId/physical-audit', adminLimiter, requireAuthorizedUser, async(req,res)=>{
+  if(!ENABLE_PERSONAL_PHYSICAL_AUDIT) return res.status(503).json({ok:false,error:'Auditoria fisica pessoal ainda nao ativada'});
+  if(req.params.deviceId!==DEFAULT_DEVICE_ID) return res.status(404).json({ok:false,error:'Capacete nao disponivel nesta conta pessoal'});
+  try {
+    if(req.appUser.platformAdmin!==true){
+      const own=await db.ref(`personalHelmetOwners/${DEFAULT_DEVICE_ID}/${req.appUser.uid}`).once('value');
+      if(own.val()!==true) return res.status(403).json({ok:false,error:'Acesso nao autorizado ao capacete pessoal'});
+    }
+    const base=personalPhysicalBase();
+    const [a,r,e]=await Promise.all([
+      db.ref(`${base}/atual`).once('value'),
+      db.ref(`${base}/resumo`).once('value'),
+      db.ref(`${base}/eventos`).orderByKey().limitToLast(50).once('value'),
+    ]);
+    const atual=projectAudit({atual:a.val(),resumo:r.val()},Date.now(),OFFLINE_GAP_SECONDS*1000);
+    if(!atual)return res.status(404).json({ok:false,error:'Aguardando primeiro registro fisico real'});
+    const eventosRecentes=Object.values(asObject(e.val()))
+      .sort((x,y)=>String(y.fimISO||'').localeCompare(String(x.fimISO||'')));
+    return res.set('Cache-Control','no-store').json({ok:true,deviceId:DEFAULT_DEVICE_ID,
+      origem:a.val()?.origemLeitura||'NAO_INFORMADA',
+      dadosDemonstrativos:a.val()?.origemLeitura==='TESTE_AUTORIZADO',atual,eventosRecentes});
+  }catch(err){console.error('Auditoria pessoal:',err.message);return res.status(500).json({ok:false,error:'Falha na auditoria pessoal'});}
 });
 
 app.post("/mary/chat", maryLimiter, requireAuthorizedUser, async (req, res) => {
@@ -1455,7 +1527,7 @@ app.post("/admin/test", adminLimiter, async (req, res) => {
     obra: req.body?.obra || DEFAULT_OBRA,
   });
   if (!reading) return res.status(400).json({ ok: false, error: "Status inválido" });
-  await enqueue(() => processReading(reading));
+  await enqueue(() => processReading(reading,"TESTE_AUTORIZADO"));
   return res.json({ ok: true, convertido: reading.status, deviceId: reading.deviceId });
 });
 
