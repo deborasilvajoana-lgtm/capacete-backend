@@ -1,0 +1,36 @@
+
+name: CAP-001 - Testes de Seguranca
+
+on:
+  push:
+    branches:
+      - cap001-fase5-teste
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validar-cap001:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar codigo da branch
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Verificar sintaxe
+        run: |
+          node --check server.js
+          node --check lib/helmet_audit.js
+          node --check test/helmet_audit.test.js
+
+      - name: Executar testes
+        run: npm test
