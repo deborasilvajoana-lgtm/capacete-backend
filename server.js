@@ -4,6 +4,7 @@ const { isApprovedDashboardOrigin } = require('./lib/cors_policy');
 const { validRegistration, isAuthorized } = require('./lib/access_requests');
 const { makeApprovalEmailSender, isEmailReady } = require('./lib/email_https');
 const { canAcceptDeviceReading } = require('./lib/device_policy');
+const { mqttOwnsTelemetry } = require('./lib/telemetry_transport');
 
 
 const crypto = require("crypto");
@@ -669,6 +670,7 @@ function makeState(reading, context, scheduleResult, nowMs) {
 }
 
 async function processReading(reading, origin="ESP32_MQTT") {
+  if (!mqttOwnsTelemetry((await db.ref(`telemetryTransports/${reading.deviceId}`).once("value")).val())) return;
   // Legacy ESP32 is intentionally exempt. New devices require registration
   // by an approved administrator, preventing random topics polluting Firebase.
   const registrySnap = await db.ref(`deviceRegistry/${reading.deviceId}`).once('value');
@@ -742,6 +744,7 @@ async function processReading(reading, origin="ESP32_MQTT") {
 
 
 async function applyScheduleTickForDevice(deviceId, state, nowMs) {
+  if (!mqttOwnsTelemetry((await db.ref(`telemetryTransports/${deviceId}`).once("value")).val())) return;
   if (!state || !["ATIVO", "INATIVO"].includes(state.sensorStatus)) return;
   // Um relógio de jornada nunca transforma ausência de comunicação em
   // "sem capacete". Se a leitura estiver velha, o app mostrará OFFLINE.
@@ -859,6 +862,7 @@ app.get("/health", async (req, res) => {
     mqtt: mqttConnected,
     uptimeSeconds: Math.floor(process.uptime()),
     version: "3.5.3",
+    telemetryTransportGuard: 1,
     maryAiConfigured: MARY_AI_CONFIGURED,
   });
 });

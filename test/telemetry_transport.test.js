@@ -1,0 +1,1 @@
+'use strict';const test=require('node:test');const assert=require('node:assert/strict');const {mqttOwnsTelemetry}=require('../lib/telemetry_transport');test('legacy MQTT preservado; HTTPS bloqueia MQTT',()=>{assert.equal(mqttOwnsTelemetry(null),true);assert.equal(mqttOwnsTelemetry({transport:'mqtt'}),true);assert.equal(mqttOwnsTelemetry({transport:'https-worker'}),false);});
